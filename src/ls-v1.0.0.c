@@ -9,6 +9,7 @@
 #include <pwd.h>
 #include <grp.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 
 extern int errno;
 
@@ -17,6 +18,8 @@ void do_ls_long(const char *dir);
 void print_long(const char *dir, const char *name,
                 int w_link, int w_user, int w_group, int w_size);
 void mode_to_string(mode_t mode, char *s);
+void do_ls_columns(const char *dir);
+int get_term_width(void);
 
 int main(int argc, char *argv[])
 {
@@ -55,11 +58,21 @@ int main(int argc, char *argv[])
 void do_ls(const char *dir, int long_flag)
 {
     if (long_flag)
-    {
         do_ls_long(dir);
-        return;
-    }
+    else
+        do_ls_columns(dir);
+}
 
+int get_term_width(void)
+{
+    struct winsize w;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == -1 || w.ws_col == 0)
+        return 80; /* fallback */
+    return w.ws_col;
+}
+
+void do_ls_columns(const char *dir)
+{
     struct dirent *entry;
     DIR *dp = opendir(dir);
     if (dp == NULL)
@@ -67,16 +80,70 @@ void do_ls(const char *dir, int long_flag)
         fprintf(stderr, "Cannot open directory : %s\n", dir);
         return;
     }
+
+    char **names = NULL;
+    int count = 0, capacity = 0;
+    size_t maxlen = 0;
+
+    /* Step 1: read all names into a dynamic array */
     errno = 0;
     while ((entry = readdir(dp)) != NULL)
     {
         if (entry->d_name[0] == '.')
             continue;
-        printf("%s\n", entry->d_name);
+        if (count == capacity)
+        {
+            capacity = capacity ? capacity * 2 : 16;
+            char **tmp = realloc(names, capacity * sizeof(char *));
+            if (tmp == NULL)
+            {
+                perror("realloc");
+                exit(EXIT_FAILURE);
+            }
+            names = tmp;
+        }
+        names[count] = strdup(entry->d_name);
+        if (names[count] == NULL)
+        {
+            perror("strdup");
+            exit(EXIT_FAILURE);
+        }
+        size_t len = strlen(entry->d_name);
+        if (len > maxlen)
+            maxlen = len;
+        count++;
     }
     if (errno != 0)
         perror("readdir failed");
     closedir(dp);
+
+    /* Step 2: calculate layout */
+    if (count > 0)
+    {
+        int term_width = get_term_width();
+        int col_width = (int)maxlen + 2;
+        int cols = term_width / col_width;
+        if (cols < 1)
+            cols = 1;
+        int rows = (count + cols - 1) / cols; /* ceiling division */
+
+        /* Step 3: print down then across */
+        for (int r = 0; r < rows; r++)
+        {
+            for (int c = 0; c < cols; c++)
+            {
+                int i = r + c * rows;
+                if (i >= count)
+                    break;
+                printf("%-*s", col_width, names[i]);
+            }
+            putchar('\n');
+        }
+    }
+
+    for (int i = 0; i < count; i++)
+        free(names[i]);
+    free(names);
 }
 
 void do_ls_long(const char *dir)
