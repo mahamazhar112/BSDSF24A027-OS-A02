@@ -30,3 +30,19 @@ readdir() returns entries one at a time in whatever order the file system stores
 
 **Q2. Explain the purpose and signature of the comparison function required by qsort(). How does it work, and why must it take const void * arguments?**
 The comparison function tells qsort how to order two elements. Its signature is `int cmp(const void *a, const void *b)`. It returns a negative value if a should come before b, zero if they are equal, and a positive value if a should come after b. qsort is generic and works on arrays of any type, so it cannot know the element type and passes untyped pointers; `const` promises that the function will not modify the data. Inside the function I cast the pointers to the real type. My array holds char *, so each argument points to a char *: I cast it to `const char **`, dereference once to get the string, and return strcmp(s1, s2).
+
+## Feature 6: Colorized Output (v1.5.0)
+
+**Q1. How do ANSI escape codes work to produce color in a standard Linux terminal? Show the specific code sequence for printing text in green.**
+ANSI escape codes are special character sequences that begin with the ESC character (octal \033). The terminal does not display them; it interprets them as formatting commands. The sequence `\033[` followed by a number and `m` sets a text attribute, for example 32 for a green foreground. Everything printed afterwards uses that color until it is reset with `\033[0m`. To print text in green: `printf("\033[0;32m%s\033[0m", "hello");`
+
+**Q2. To color an executable file, which bits in the st_mode field must be checked to determine if a file is executable by the owner, group, or others?**
+The execute permission bits are S_IXUSR (0100) for the owner, S_IXGRP (0010) for the group, and S_IXOTH (0001) for others. Each is tested with the bitwise AND operator, e.g. `mode & S_IXUSR`, which is non-zero when the bit is set. A file is treated as executable if any of the three is set: `mode & (S_IXUSR | S_IXGRP | S_IXOTH)`. I also check S_ISREG(mode), because directories have execute bits too (needed to enter them) but are colored as directories instead.
+
+## Feature 7: Recursive Listing -R (v1.6.0)
+
+**Q1. In a recursive function, what is a "base case"? In the context of your recursive ls, what is the base case that stops the recursion from continuing forever?**
+A base case is the condition under which a recursive function stops calling itself and returns directly; without it the recursion never ends. In my recursive ls, the base case is a directory that contains no subdirectories. For such a directory, the loop over its entries finds nothing for which S_ISDIR is true, so no further call to do_ls() is made and the function returns. Skipping the entries "." and ".." also prevents infinite recursion, since they point back to the same or the parent directory. Using lstat() means symbolic links are not followed as directories, which avoids cycles.
+
+**Q2. Explain why it is essential to construct a full path (e.g., "parent_dir/subdir") before making a recursive call. What would happen if you simply called do_ls("subdir") from within the do_ls("parent_dir") function call?**
+readdir() returns only the entry's name ("subdir"), not its location. opendir() and lstat() resolve a relative name against the program's current working directory, not against the directory being listed. If I called do_ls("subdir") from inside do_ls("parent_dir"), the program would look for "subdir" in the current working directory, where it usually does not exist, so opendir() would fail with "Cannot open directory" (or, worse, it could open a different directory with the same name). Building "parent_dir/subdir" gives the correct location regardless of the current working directory.
