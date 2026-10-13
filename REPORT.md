@@ -22,3 +22,11 @@ The vertical ("down then across") layout needs more pre-calculation. Before prin
 
 **Q2. Describe the strategy you used in your code to manage the different display modes (-l, -x, and default). How did your program decide which function to call for printing?**
 I use a single integer variable `mode` with the values MODE_DEFAULT, MODE_LONG and MODE_HORIZONTAL. In main(), the getopt() loop sets `mode` when it sees -l or -x. The value is passed to do_ls(), which checks it: if it is MODE_LONG, do_ls_long() is called. Otherwise, all names are read once into an array with read_names(), and then print_horizontal() is called for MODE_HORIZONTAL, or print_vertical() for the default mode. Finally the array is freed.
+
+## Feature 5: Alphabetical Sort (v1.4.0)
+
+**Q1. Why is it necessary to read all directory entries into memory before you can sort them? What are the potential drawbacks of this approach for directories containing millions of files?**
+readdir() returns entries one at a time in whatever order the file system stores them, so the program cannot know which name comes first alphabetically until it has seen all of them. Sorting needs the full list available at once, so every name is first read into a dynamic array. For a directory with millions of files this has drawbacks: high memory use (every name is stored), a long delay before the first line is printed because nothing can be shown until reading and sorting are finished, and sorting time of O(n log n).
+
+**Q2. Explain the purpose and signature of the comparison function required by qsort(). How does it work, and why must it take const void * arguments?**
+The comparison function tells qsort how to order two elements. Its signature is `int cmp(const void *a, const void *b)`. It returns a negative value if a should come before b, zero if they are equal, and a positive value if a should come after b. qsort is generic and works on arrays of any type, so it cannot know the element type and passes untyped pointers; `const` promises that the function will not modify the data. Inside the function I cast the pointers to the real type. My array holds char *, so each argument points to a char *: I cast it to `const char **`, dereference once to get the string, and return strcmp(s1, s2).
