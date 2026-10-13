@@ -15,19 +15,33 @@
 #define MODE_LONG       1
 #define MODE_HORIZONTAL 2
 
+/* ANSI escape codes */
+#define COLOR_RESET   "\033[0m"
+#define COLOR_BLUE    "\033[0;34m"
+#define COLOR_GREEN   "\033[0;32m"
+#define COLOR_RED     "\033[0;31m"
+#define COLOR_PINK    "\033[0;35m"
+#define COLOR_REVERSE "\033[7m"
+
 extern int errno;
+
+int use_color = 0; /* set in main: only color when output is a terminal */
 
 void do_ls(const char *dir, int mode);
 int get_term_width(void);
 int read_names(const char *dir, char ***names, int *count, size_t *maxlen);
 int compare_names(const void *a, const void *b);
-void print_vertical(char **names, int count, size_t maxlen);
-void print_horizontal(char **names, int count, size_t maxlen);
+void print_vertical(const char *dir, char **names, int count, size_t maxlen);
+void print_horizontal(const char *dir, char **names, int count, size_t maxlen);
 void free_names(char **names, int count);
 void do_ls_long(const char *dir, char **names, int count);
 void print_long(const char *dir, const char *name,
                 int w_link, int w_user, int w_group, int w_size);
 void mode_to_string(mode_t mode, char *s);
+const char *get_color(const char *name, mode_t mode);
+void print_colored(const char *name, mode_t mode);
+void print_entry(const char *dir, const char *name, int width);
+int ends_with(const char *s, const char *suffix);
 
 int main(int argc, char *argv[])
 {
@@ -49,6 +63,8 @@ int main(int argc, char *argv[])
             exit(EXIT_FAILURE);
         }
     }
+
+    use_color = isatty(STDOUT_FILENO);
 
     if (optind == argc)
     {
@@ -75,21 +91,19 @@ void do_ls(const char *dir, int mode)
     if (read_names(dir, &names, &count, &maxlen) == -1)
         return;
 
-    /* sort right after reading, before any display function */
     if (count > 1)
         qsort(names, count, sizeof(char *), compare_names);
 
     if (mode == MODE_LONG)
         do_ls_long(dir, names, count);
     else if (mode == MODE_HORIZONTAL)
-        print_horizontal(names, count, maxlen);
+        print_horizontal(dir, names, count, maxlen);
     else
-        print_vertical(names, count, maxlen);
+        print_vertical(dir, names, count, maxlen);
 
     free_names(names, count);
 }
 
-/* qsort passes pointers to the array elements; each element is a char* */
 int compare_names(const void *a, const void *b)
 {
     const char *s1 = *(const char **)a;
@@ -156,7 +170,64 @@ int read_names(const char *dir, char ***names, int *count, size_t *maxlen)
     return 0;
 }
 
-void print_vertical(char **names, int count, size_t maxlen)
+/* ---------- color helpers ---------- */
+
+int ends_with(const char *s, const char *suffix)
+{
+    size_t ls = strlen(s), lx = strlen(suffix);
+    if (lx > ls)
+        return 0;
+    return strcmp(s + ls - lx, suffix) == 0;
+}
+
+/* returns the escape code for this file, or "" for no color */
+const char *get_color(const char *name, mode_t mode)
+{
+    if (S_ISLNK(mode))
+        return COLOR_PINK;
+    if (S_ISDIR(mode))
+        return COLOR_BLUE;
+    if (S_ISCHR(mode) || S_ISBLK(mode) || S_ISFIFO(mode) || S_ISSOCK(mode))
+        return COLOR_REVERSE;
+    if (ends_with(name, ".tar") || ends_with(name, ".gz") ||
+        ends_with(name, ".zip"))
+        return COLOR_RED;
+    if (S_ISREG(mode) && (mode & (S_IXUSR | S_IXGRP | S_IXOTH)))
+        return COLOR_GREEN;
+    return "";
+}
+
+void print_colored(const char *name, mode_t mode)
+{
+    const char *color = use_color ? get_color(name, mode) : "";
+    if (color[0] != '\0')
+        printf("%s%s%s", color, name, COLOR_RESET);
+    else
+        printf("%s", name);
+}
+
+/* prints a colored name, then pads with spaces up to 'width' */
+void print_entry(const char *dir, const char *name, int width)
+{
+    struct stat st;
+    char path[PATH_MAX];
+    mode_t m = 0;
+
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
+    if (lstat(path, &st) == 0)
+        m = st.st_mode;
+
+    print_colored(name, m);
+
+    /* %-*s cannot be used: escape codes would count as visible characters */
+    int pad = width - (int)strlen(name);
+    if (pad > 0)
+        printf("%*s", pad, "");
+}
+
+/* ---------- display functions ---------- */
+
+void print_vertical(const char *dir, char **names, int count, size_t maxlen)
 {
     if (count == 0)
         return;
@@ -175,13 +246,13 @@ void print_vertical(char **names, int count, size_t maxlen)
             int i = r + c * rows;
             if (i >= count)
                 break;
-            printf("%-*s", col_width, names[i]);
+            print_entry(dir, names[i], col_width);
         }
         putchar('\n');
     }
 }
 
-void print_horizontal(char **names, int count, size_t maxlen)
+void print_horizontal(const char *dir, char **names, int count, size_t maxlen)
 {
     int term_width = get_term_width();
     int col_width = (int)maxlen + 2;
@@ -194,7 +265,7 @@ void print_horizontal(char **names, int count, size_t maxlen)
             putchar('\n');
             pos = 0;
         }
-        printf("%-*s", col_width, names[i]);
+        print_entry(dir, names[i], col_width);
         pos += col_width;
     }
     if (count > 0)
@@ -280,7 +351,7 @@ void print_long(const char *dir, const char *name,
     else
         printf("%.12s ", t + 4);                /* recent: show time */
 
-    printf("%s", name);
+    print_colored(name, st.st_mode);
 
     if (S_ISLNK(st.st_mode))
     {
